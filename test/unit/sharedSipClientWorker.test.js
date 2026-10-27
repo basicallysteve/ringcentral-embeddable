@@ -577,6 +577,67 @@ describe('SharedSipClient worker', () => {
     expect(sipClient.transport).toBeNull();
   });
 
+  it('replays the live SIP connection to late ports and records client disconnects for HAR', async () => {
+    const WebSocketMock = installWebSocket();
+    const { connect, sipClient } = loadWorker();
+    const port = new TestPort('first');
+    connect({ ports: [port] });
+
+    const startPromise = port.receive({
+      type: 'workerRequest',
+      requestId: 'start-sip',
+      request: {
+        type: 'startSipClient',
+        data: {
+          sipInfo: {
+            authorizationId: 'auth-id',
+            domain: 'sip.example.com',
+            outboundProxy: 'primary.example.com',
+            password: 'password',
+            username: '101',
+          },
+          instanceId: 'instance-id',
+          device: { id: 'device-id' },
+          clientId: 'client-id',
+        },
+      },
+    });
+    WebSocketMock.instances[0].emit('open');
+    await startPromise;
+    WebSocketMock.instances[0].emit('message', {
+      data: 'SIP/2.0 200 OK\r\nContact: <sip:101@sip.example.com>;expires=60',
+    });
+    await flushPromises();
+
+    const latePort = new TestPort('late');
+    connect({ ports: [latePort] });
+    expect(latePort.postMessage).toHaveBeenCalledWith({
+      type: 'harWebSocketEvent',
+      event: expect.objectContaining({
+        connectionId: 'uuid-value', type: 'connect', url: 'wss://primary.example.com',
+      }),
+    });
+    expect(latePort.postMessage).toHaveBeenCalledWith({
+      type: 'harWebSocketEvent',
+      event: expect.objectContaining({ connectionId: 'uuid-value', type: 'open' }),
+    });
+
+    clearTimeout(sipClient.timeoutHandle);
+    sipClient.transport.disconnect();
+    expect(latePort.postMessage).toHaveBeenCalledWith({
+      type: 'harWebSocketEvent',
+      event: expect.objectContaining({
+        connectionId: 'uuid-value', type: 'close', reason: 'Client disconnect',
+      }),
+    });
+    expect(sipClient.transport.harLifecycleEvents).toEqual([]);
+
+    const anotherPort = new TestPort('after-close');
+    connect({ ports: [anotherPort] });
+    expect(anotherPort.postMessage).not.toHaveBeenCalled();
+    sipClient.transport.dispose();
+  });
+
   it('handles transport connection failures, reconnect branches, and disposal guards', async () => {
     const WebSocketMock = installWebSocket();
     const { connect, sipClient } = loadWorker();

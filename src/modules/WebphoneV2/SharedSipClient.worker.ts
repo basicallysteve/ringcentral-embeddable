@@ -35,12 +35,21 @@ type TransportStatus =
 
 const logger = new Logger();
 
+function broadcastHarEvent(event: Record<string, any>) {
+  ports.forEach((port) => {
+    port.postMessage({ type: 'harWebSocketEvent', event });
+  });
+}
+
 class Transport extends EventEmitter {
   public wsc: WebSocket;
   public logger: Logger;
   public status: TransportStatus = 'disconnected';
   private disposed: boolean = false;
   public debug?: boolean;
+  public connectionId: string;
+  // connect/open HAR events of the live connection, replayed to tabs that attach later
+  public harLifecycleEvents: Record<string, any>[] = [];
   private wsServers: {
     server: string,
     isError: boolean,
@@ -92,9 +101,21 @@ class Transport extends EventEmitter {
       throw new Error('No available servers');
     }
     this.onMessage = (event) => {
+      broadcastHarEvent({
+        connectionId: this.connectionId,
+        type: 'message',
+        direction: 'receive',
+        data: String(event.data),
+        timestamp: Date.now(),
+      });
       this.emit('message', event);
     };
     this.onClose = (event: CloseEvent) => {
+      this.endHarConnection({
+        type: 'close',
+        code: event.code,
+        reason: event.reason,
+      });
       this.logger.warn('Transport closed');
       this.emit('close');
       if (this.status !== 'disconnected') {
@@ -136,6 +157,15 @@ class Transport extends EventEmitter {
       await this.disconnect();
     }
     this.setStatus('connecting');
+    this.connectionId = uuid();
+    const harConnectEvent = {
+      connectionId: this.connectionId,
+      type: 'connect',
+      url: `wss://${this.currentServer.server}`,
+      timestamp: Date.now(),
+    };
+    this.harLifecycleEvents = [harConnectEvent];
+    broadcastHarEvent(harConnectEvent);
     this.wsc = new WebSocket(
       "wss://" + this.currentServer.server,
       "sip",
@@ -150,6 +180,13 @@ class Transport extends EventEmitter {
 
     return new Promise<void>((resolve, reject) => {
       const openEventHandler = () => {
+        const harOpenEvent = {
+          connectionId: this.connectionId,
+          type: 'open',
+          timestamp: Date.now(),
+        };
+        this.harLifecycleEvents.push(harOpenEvent);
+        broadcastHarEvent(harOpenEvent);
         clearTimeout(this.connectTimeoutHandle);
         this.connectTimeoutHandle = null;
         this.wsc.removeEventListener("open", openEventHandler);
@@ -159,6 +196,7 @@ class Transport extends EventEmitter {
         resolve();
       };
       const errorEventHandler = (e) => {
+        this.endHarConnection({ type: 'error' });
         clearTimeout(this.connectTimeoutHandle);
         this.connectTimeoutHandle = null;
         this.wsc.removeEventListener("error", errorEventHandler);
@@ -178,6 +216,7 @@ class Transport extends EventEmitter {
           this.wsc.removeEventListener("close", this.onClose);
         }
         reject(new Error('Connection timeout'));
+        this.endHarConnection({ type: 'close', code: 1006, reason: 'Connection timeout' });
         if (this.wsc) {
           this.wsc.close();
           this.wsc = null;
@@ -271,11 +310,25 @@ class Transport extends EventEmitter {
     if (this.wsc) {
       this.wsc.removeEventListener('message', this.onMessage);
       this.wsc.removeEventListener('close', this.onClose);
+      // onClose is detached above, so record the close for the HAR here
+      this.endHarConnection({ type: 'close', code: 1000, reason: 'Client disconnect' });
       this.wsc.close();
       this.wsc = null;
     }
     this.currentServer = null;
     this.reconnectionAttempts = 0;
+  }
+
+  private endHarConnection(event: Record<string, any>) {
+    if (this.harLifecycleEvents.length === 0) {
+      return;
+    }
+    this.harLifecycleEvents = [];
+    broadcastHarEvent({
+      connectionId: this.connectionId,
+      timestamp: Date.now(),
+      ...event,
+    });
   }
 
   private noAvailableServers() {
@@ -562,9 +615,24 @@ class SharedWorkerSipClient extends EventEmitter implements SipClient {
     let message: OutboundMessage;
     if (typeof rawMessage === 'string') {
       this.transport.wsc.send(rawMessage);
+      broadcastHarEvent({
+        connectionId: this.transport.connectionId,
+        type: 'message',
+        direction: 'send',
+        data: rawMessage,
+        timestamp: Date.now(),
+      });
       message = OutboundMessage.fromString(rawMessage);
     } else {
-      this.transport.wsc.send(rawMessage.toString());
+      const serializedMessage = rawMessage.toString();
+      this.transport.wsc.send(serializedMessage);
+      broadcastHarEvent({
+        connectionId: this.transport.connectionId,
+        type: 'message',
+        direction: 'send',
+        data: serializedMessage,
+        timestamp: Date.now(),
+      });
       message = rawMessage;
     }
     this.emit("outboundMessage", message);
@@ -604,6 +672,10 @@ onconnect = (event) => {
     logger.log('set first port as mainPort');
     mainPort = port;
   }
+  // Let a late-joining tab's HAR recorder know about the already-open SIP connection
+  (sipClient.transport?.harLifecycleEvents || []).forEach((harEvent) => {
+    port.postMessage({ type: 'harWebSocketEvent', event: harEvent });
+  });
   port.onmessage = async(event) => {
     const { type, requestId, request } = event.data;
     if (type === 'destroyPort') {

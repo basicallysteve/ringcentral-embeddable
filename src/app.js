@@ -2,6 +2,9 @@ import 'setimmediate';
 import './lib/TabFreezePrevention';
 import './lib/patchGetUserMedia';
 import './lib/patchOpenWindow';
+import { installHarRecorder } from './lib/HarRecorder';
+
+installHarRecorder();
 
 import React from 'react';
 import ReactDOM from 'react-dom';
