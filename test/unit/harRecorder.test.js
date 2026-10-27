@@ -131,6 +131,51 @@ describe('HarRecorder', () => {
     expect(entry._webSocketMessages[0].data).toContain('CSeq: 1 REGISTER');
   });
 
+  it('caps messages kept per WebSocket connection', () => {
+    const recorder = loadRecorder({ fetchImpl: jest.fn() });
+    const base = { connectionId: 'c1', timestamp: 1 };
+    recorder.recordWebSocketEvent({ ...base, type: 'connect', url: 'wss://sip.example.com' });
+    for (let i = 0; i < 1005; i += 1) {
+      recorder.recordWebSocketEvent({
+        ...base, type: 'message', direction: 'receive', data: `OPTIONS ${i}`,
+      });
+    }
+    const messages = recorder.getHar().log.entries[0]._webSocketMessages;
+    expect(messages).toHaveLength(1000);
+    expect(messages[0].data).toBe('OPTIONS 5');
+  });
+
+  it('keeps live WebSocket entries when evicting or clearing', async () => {
+    const fetchImpl = jest.fn(async () => new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const recorder = loadRecorder({ fetchImpl });
+    recorder.installHarRecorder();
+    const base = { connectionId: 'c1', timestamp: 1 };
+    recorder.recordWebSocketEvent({ ...base, type: 'connect', url: 'wss://sip.example.com' });
+    for (let i = 0; i < 505; i += 1) {
+      await global.window.fetch(`https://api.example.com/${i}`);
+    }
+    await flush();
+    let { entries } = recorder.getHar().log;
+    expect(entries).toHaveLength(500);
+    expect(entries[0].request.url).toBe('wss://sip.example.com/');
+    expect(entries[1].request.url).toBe('https://api.example.com/6');
+
+    recorder.recordWebSocketEvent({ ...base, type: 'message', direction: 'send', data: 'x' });
+    recorder.clearHar();
+    ({ entries } = recorder.getHar().log);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]._webSocketMessages).toHaveLength(0);
+    recorder.recordWebSocketEvent({ ...base, type: 'message', direction: 'send', data: 'y' });
+    expect(recorder.getHar().log.entries[0]._webSocketMessages).toHaveLength(1);
+
+    recorder.recordWebSocketEvent({ ...base, type: 'close', code: 1000 });
+    recorder.clearHar();
+    expect(recorder.getHar().log.entries).toHaveLength(0);
+  });
+
   it('ignores WebSocket events for unknown connections', () => {
     const recorder = loadRecorder({ fetchImpl: jest.fn() });
     recorder.recordWebSocketEvent({ connectionId: 'nope', type: 'message', timestamp: 1, data: 'x' });

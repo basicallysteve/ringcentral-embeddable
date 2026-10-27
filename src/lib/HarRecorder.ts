@@ -3,6 +3,7 @@
 
 const MAX_ENTRIES = 500;
 const MAX_BODY_SIZE = 200 * 1024;
+const MAX_WEBSOCKET_MESSAGES = 1000;
 const SENSITIVE_HEADERS = ['authorization', 'cookie', 'set-cookie', 'proxy-authorization'];
 const SENSITIVE_FIELDS = /(access_token|refresh_token|id_token|client_secret|password|code|assertion)/i;
 
@@ -78,7 +79,12 @@ function queryString(url: string): { name: string; value: string }[] {
 
 function push(entry: any) {
   entries.push(entry);
-  if (entries.length > MAX_ENTRIES) entries.shift();
+  if (entries.length > MAX_ENTRIES) {
+    // Evict the oldest entry that is not a live WebSocket, so an open SIP connection keeps being exported
+    const active = new Set(webSocketEntries.values());
+    const index = entries.findIndex((item) => !active.has(item));
+    entries.splice(index === -1 ? 0 : index, 1);
+  }
 }
 
 function buildEntry({
@@ -175,6 +181,7 @@ export function recordWebSocketEvent(event: {
       opcode: 1,
       data: redactSipMessage(event.data || ''),
     });
+    if (entry._webSocketMessages.length > MAX_WEBSOCKET_MESSAGES) entry._webSocketMessages.shift();
   } else if (event.type === 'close' || event.type === 'error') {
     entry.time = event.timestamp - Date.parse(entry.startedDateTime);
     entry.timings.wait = entry.time;
@@ -325,6 +332,11 @@ export function getHar() {
 
 export function clearHar() {
   entries.length = 0;
+  // Live WebSocket entries keep receiving messages, so keep them (emptied) in the export
+  webSocketEntries.forEach((entry) => {
+    entry._webSocketMessages.length = 0;
+    entries.push(entry);
+  });
 }
 
 export function downloadHar() {

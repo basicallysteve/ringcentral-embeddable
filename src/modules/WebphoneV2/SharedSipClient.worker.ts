@@ -48,6 +48,8 @@ class Transport extends EventEmitter {
   private disposed: boolean = false;
   public debug?: boolean;
   public connectionId: string;
+  // connect/open HAR events of the live connection, replayed to tabs that attach later
+  public harLifecycleEvents: Record<string, any>[] = [];
   private wsServers: {
     server: string,
     isError: boolean,
@@ -109,12 +111,10 @@ class Transport extends EventEmitter {
       this.emit('message', event);
     };
     this.onClose = (event: CloseEvent) => {
-      broadcastHarEvent({
-        connectionId: this.connectionId,
+      this.endHarConnection({
         type: 'close',
         code: event.code,
         reason: event.reason,
-        timestamp: Date.now(),
       });
       this.logger.warn('Transport closed');
       this.emit('close');
@@ -158,12 +158,14 @@ class Transport extends EventEmitter {
     }
     this.setStatus('connecting');
     this.connectionId = uuid();
-    broadcastHarEvent({
+    const harConnectEvent = {
       connectionId: this.connectionId,
       type: 'connect',
       url: `wss://${this.currentServer.server}`,
       timestamp: Date.now(),
-    });
+    };
+    this.harLifecycleEvents = [harConnectEvent];
+    broadcastHarEvent(harConnectEvent);
     this.wsc = new WebSocket(
       "wss://" + this.currentServer.server,
       "sip",
@@ -178,11 +180,13 @@ class Transport extends EventEmitter {
 
     return new Promise<void>((resolve, reject) => {
       const openEventHandler = () => {
-        broadcastHarEvent({
+        const harOpenEvent = {
           connectionId: this.connectionId,
           type: 'open',
           timestamp: Date.now(),
-        });
+        };
+        this.harLifecycleEvents.push(harOpenEvent);
+        broadcastHarEvent(harOpenEvent);
         clearTimeout(this.connectTimeoutHandle);
         this.connectTimeoutHandle = null;
         this.wsc.removeEventListener("open", openEventHandler);
@@ -192,11 +196,7 @@ class Transport extends EventEmitter {
         resolve();
       };
       const errorEventHandler = (e) => {
-        broadcastHarEvent({
-          connectionId: this.connectionId,
-          type: 'error',
-          timestamp: Date.now(),
-        });
+        this.endHarConnection({ type: 'error' });
         clearTimeout(this.connectTimeoutHandle);
         this.connectTimeoutHandle = null;
         this.wsc.removeEventListener("error", errorEventHandler);
@@ -216,6 +216,7 @@ class Transport extends EventEmitter {
           this.wsc.removeEventListener("close", this.onClose);
         }
         reject(new Error('Connection timeout'));
+        this.endHarConnection({ type: 'close', code: 1006, reason: 'Connection timeout' });
         if (this.wsc) {
           this.wsc.close();
           this.wsc = null;
@@ -309,11 +310,25 @@ class Transport extends EventEmitter {
     if (this.wsc) {
       this.wsc.removeEventListener('message', this.onMessage);
       this.wsc.removeEventListener('close', this.onClose);
+      // onClose is detached above, so record the close for the HAR here
+      this.endHarConnection({ type: 'close', code: 1000, reason: 'Client disconnect' });
       this.wsc.close();
       this.wsc = null;
     }
     this.currentServer = null;
     this.reconnectionAttempts = 0;
+  }
+
+  private endHarConnection(event: Record<string, any>) {
+    if (this.harLifecycleEvents.length === 0) {
+      return;
+    }
+    this.harLifecycleEvents = [];
+    broadcastHarEvent({
+      connectionId: this.connectionId,
+      timestamp: Date.now(),
+      ...event,
+    });
   }
 
   private noAvailableServers() {
@@ -657,6 +672,10 @@ onconnect = (event) => {
     logger.log('set first port as mainPort');
     mainPort = port;
   }
+  // Let a late-joining tab's HAR recorder know about the already-open SIP connection
+  (sipClient.transport?.harLifecycleEvents || []).forEach((harEvent) => {
+    port.postMessage({ type: 'harWebSocketEvent', event: harEvent });
+  });
   port.onmessage = async(event) => {
     const { type, requestId, request } = event.data;
     if (type === 'destroyPort') {
