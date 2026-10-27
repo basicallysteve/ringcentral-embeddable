@@ -63,6 +63,24 @@ describe('HarRecorder', () => {
     expect(entries[0].response.statusText).toContain('boom');
   });
 
+  it('does not consume a Request input before forwarding it to fetch', async () => {
+    const fetchImpl = jest.fn(async (input) => {
+      if (input.bodyUsed) {
+        throw new TypeError("Cannot construct a Request with a Request object that has already been used.");
+      }
+      return new Response('{}', { status: 200 });
+    });
+    const recorder = loadRecorder({ fetchImpl });
+    recorder.installHarRecorder();
+    const request = new Request('https://api.example.com/token', {
+      method: 'POST',
+      body: 'grant_type=authorization_code',
+    });
+
+    await expect(global.window.fetch(request)).resolves.toBeInstanceOf(Response);
+    expect(fetchImpl).toHaveBeenCalledWith(request, undefined);
+  });
+
   it('caps entries at 500 and can be cleared', async () => {
     const fetchImpl = jest.fn(async () => new Response('{}', {
       status: 200,

@@ -7,7 +7,7 @@ export default {
   text: 'Text',
   logout: 'Logout',
   version: 'Version',
-  downloadHar: 'Download HAR log',
+  downloadHar: 'Download diagnostics',
   settings: 'Settings',
   clickToDial: 'Click to Dial',
   autoCreateLog: 'Auto-create Call Log',

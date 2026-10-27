@@ -192,7 +192,10 @@ function patchFetch() {
     const startedAt = Date.now();
     let request: Request | null = null;
     try {
-      request = new Request(input as any, init);
+      const requestInput = typeof Request !== 'undefined' && input instanceof Request
+        ? input.clone()
+        : input;
+      request = new Request(requestInput as any, init);
     } catch (e) {
       // ignore, fall back to the raw call
     }
