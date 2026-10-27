@@ -6,6 +6,7 @@ import ResponseMessage from "ringcentral-web-phone/sip-message/outbound/response
 import type { SipClient, SipClientOptions, SipInfo } from "ringcentral-web-phone/types";
 import { uuid } from "ringcentral-web-phone/utils";
 import { Logger } from "./logger";
+import { recordWebSocketEvent } from '../../lib/HarRecorder';
 
 export class SharedSipClient extends EventEmitter implements SipClient {
   public disposed = false;
@@ -39,7 +40,9 @@ export class SharedSipClient extends EventEmitter implements SipClient {
     this.clientId = clientId;
     this._logger = logger;
     this.messageListener = (event) => {
-      if (event.data.type === 'inboundMessage') {
+      if (event.data.type === 'harWebSocketEvent') {
+        recordWebSocketEvent(event.data.event);
+      } else if (event.data.type === 'inboundMessage') {
         if (this.debug) {
           this._logger.debug('inboundMessage', event.data.message);
         }

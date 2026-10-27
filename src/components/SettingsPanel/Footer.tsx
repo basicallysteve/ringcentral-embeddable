@@ -1,12 +1,13 @@
 import type { FunctionComponent } from 'react';
 import React from 'react';
 
-import { styled, RcText } from '@ringcentral/juno';
+import { styled, RcText, RcLink } from '@ringcentral/juno';
 import { Eula } from '@ringcentral-integration/widgets/components/Eula';
 import Line from '@ringcentral-integration/widgets/components/Line';
 import type { FooterProps } from '@ringcentral-integration/widgets/components/SettingsPanel/SettingsPanel.interface';
 import { LogoutItem } from './SettingItem';
 import i18n from './i18n';
+import { downloadHar } from '../../lib/HarRecorder';
 
 const StyledSection = styled.section`
   padding-top: 8px;
@@ -67,6 +68,18 @@ export const Footer: FunctionComponent<NewFooterProps> = ({
           isAdmin={isAdmin}
         />
       </StyledSection>
+      <StyledVersionContainer>
+        <RcLink
+          data-sign="downloadHar"
+          href="#"
+          onClick={(e: React.MouseEvent) => {
+            e.preventDefault();
+            downloadHar();
+          }}
+        >
+          {i18n.getString('downloadHar', currentLocale)}
+        </RcLink>
+      </StyledVersionContainer>
       {versionArea}
     </>
   );

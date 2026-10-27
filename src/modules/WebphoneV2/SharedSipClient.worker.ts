@@ -35,12 +35,19 @@ type TransportStatus =
 
 const logger = new Logger();
 
+function broadcastHarEvent(event: Record<string, any>) {
+  ports.forEach((port) => {
+    port.postMessage({ type: 'harWebSocketEvent', event });
+  });
+}
+
 class Transport extends EventEmitter {
   public wsc: WebSocket;
   public logger: Logger;
   public status: TransportStatus = 'disconnected';
   private disposed: boolean = false;
   public debug?: boolean;
+  public connectionId: string;
   private wsServers: {
     server: string,
     isError: boolean,
@@ -92,9 +99,23 @@ class Transport extends EventEmitter {
       throw new Error('No available servers');
     }
     this.onMessage = (event) => {
+      broadcastHarEvent({
+        connectionId: this.connectionId,
+        type: 'message',
+        direction: 'receive',
+        data: String(event.data),
+        timestamp: Date.now(),
+      });
       this.emit('message', event);
     };
     this.onClose = (event: CloseEvent) => {
+      broadcastHarEvent({
+        connectionId: this.connectionId,
+        type: 'close',
+        code: event.code,
+        reason: event.reason,
+        timestamp: Date.now(),
+      });
       this.logger.warn('Transport closed');
       this.emit('close');
       if (this.status !== 'disconnected') {
@@ -136,6 +157,13 @@ class Transport extends EventEmitter {
       await this.disconnect();
     }
     this.setStatus('connecting');
+    this.connectionId = uuid();
+    broadcastHarEvent({
+      connectionId: this.connectionId,
+      type: 'connect',
+      url: `wss://${this.currentServer.server}`,
+      timestamp: Date.now(),
+    });
     this.wsc = new WebSocket(
       "wss://" + this.currentServer.server,
       "sip",
@@ -150,6 +178,11 @@ class Transport extends EventEmitter {
 
     return new Promise<void>((resolve, reject) => {
       const openEventHandler = () => {
+        broadcastHarEvent({
+          connectionId: this.connectionId,
+          type: 'open',
+          timestamp: Date.now(),
+        });
         clearTimeout(this.connectTimeoutHandle);
         this.connectTimeoutHandle = null;
         this.wsc.removeEventListener("open", openEventHandler);
@@ -159,6 +192,11 @@ class Transport extends EventEmitter {
         resolve();
       };
       const errorEventHandler = (e) => {
+        broadcastHarEvent({
+          connectionId: this.connectionId,
+          type: 'error',
+          timestamp: Date.now(),
+        });
         clearTimeout(this.connectTimeoutHandle);
         this.connectTimeoutHandle = null;
         this.wsc.removeEventListener("error", errorEventHandler);
@@ -562,9 +600,24 @@ class SharedWorkerSipClient extends EventEmitter implements SipClient {
     let message: OutboundMessage;
     if (typeof rawMessage === 'string') {
       this.transport.wsc.send(rawMessage);
+      broadcastHarEvent({
+        connectionId: this.transport.connectionId,
+        type: 'message',
+        direction: 'send',
+        data: rawMessage,
+        timestamp: Date.now(),
+      });
       message = OutboundMessage.fromString(rawMessage);
     } else {
-      this.transport.wsc.send(rawMessage.toString());
+      const serializedMessage = rawMessage.toString();
+      this.transport.wsc.send(serializedMessage);
+      broadcastHarEvent({
+        connectionId: this.transport.connectionId,
+        type: 'message',
+        direction: 'send',
+        data: serializedMessage,
+        timestamp: Date.now(),
+      });
       message = rawMessage;
     }
     this.emit("outboundMessage", message);
