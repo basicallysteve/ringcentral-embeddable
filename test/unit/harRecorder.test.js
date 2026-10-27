@@ -52,6 +52,32 @@ describe('HarRecorder', () => {
     expect(entry.response.content.text).not.toContain('secret');
   });
 
+  it('redacts exact sensitive field names but keeps diagnostic codes', async () => {
+    const fetchImpl = jest.fn(async () => new Response(
+      JSON.stringify({ errors: [{ errorCode: 'OAU-213' }], countryCode: 'US', refreshToken: 'rt' }),
+      { status: 400, headers: { 'content-type': 'application/json' } },
+    ));
+    const recorder = loadRecorder({ fetchImpl });
+    recorder.installHarRecorder();
+
+    await global.window.fetch('https://api.example.com/token?areaCode=650&code=abc', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=authorization_code&code=authcode&code_verifier=verifier&redirect_uri=x',
+    });
+    await flush();
+
+    const [entry] = recorder.getHar().log.entries;
+    expect(entry.request.url).toContain('areaCode=650');
+    expect(entry.request.url).not.toContain('code=abc');
+    expect(entry.request.postData.text).toBe(
+      'grant_type=authorization_code&code=[REDACTED]&code_verifier=[REDACTED]&redirect_uri=x',
+    );
+    expect(entry.response.content.text).toContain('"errorCode":"OAU-213"');
+    expect(entry.response.content.text).toContain('"countryCode":"US"');
+    expect(entry.response.content.text).not.toContain('"rt"');
+  });
+
   it('records failed fetch requests and rethrows', async () => {
     const fetchImpl = jest.fn(async () => { throw new Error('boom'); });
     const recorder = loadRecorder({ fetchImpl });

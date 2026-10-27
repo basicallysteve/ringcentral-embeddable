@@ -5,7 +5,23 @@ const MAX_ENTRIES = 500;
 const MAX_BODY_SIZE = 200 * 1024;
 const MAX_WEBSOCKET_MESSAGES = 1000;
 const SENSITIVE_HEADERS = ['authorization', 'cookie', 'set-cookie', 'proxy-authorization'];
-const SENSITIVE_FIELDS = /(access_token|refresh_token|id_token|client_secret|password|code|assertion)/i;
+// Exact field names (lowercased, `_`/`-` stripped so snake_case and camelCase both match);
+// substring matching would also hide diagnostic fields such as errorCode or countryCode
+const SENSITIVE_FIELDS = new Set([
+  'accesstoken', 'refreshtoken', 'idtoken', 'clientsecret', 'password', 'code', 'codeverifier', 'assertion',
+]);
+
+function isSensitiveField(name: string): boolean {
+  return SENSITIVE_FIELDS.has(name.toLowerCase().replace(/[_-]/g, ''));
+}
+
+function decodeFormKey(key: string): string {
+  try {
+    return decodeURIComponent(key.replace(/\+/g, ' '));
+  } catch (e) {
+    return key;
+  }
+}
 
 type Header = { name: string; value: string };
 
@@ -28,7 +44,7 @@ function redactBody(text: string | null | undefined): string {
     const scrub = (obj: any) => {
       if (obj && typeof obj === 'object') {
         Object.keys(obj).forEach((key) => {
-          if (SENSITIVE_FIELDS.test(key) && typeof obj[key] === 'string') {
+          if (isSensitiveField(key) && typeof obj[key] === 'string') {
             obj[key] = '[REDACTED]';
           } else {
             scrub(obj[key]);
@@ -40,10 +56,11 @@ function redactBody(text: string | null | undefined): string {
     result = JSON.stringify(json);
   } catch (e) {
     // form-encoded or plain text
-    result = text.replace(
-      new RegExp(`((?:^|&)(?:${SENSITIVE_FIELDS.source.slice(1, -1)})=)[^&]*`, 'gi'),
-      '$1[REDACTED]',
-    );
+    result = text.split('&').map((pair) => {
+      const idx = pair.indexOf('=');
+      if (idx === -1 || !isSensitiveField(decodeFormKey(pair.slice(0, idx)))) return pair;
+      return `${pair.slice(0, idx)}=[REDACTED]`;
+    }).join('&');
   }
   return result.length > MAX_BODY_SIZE ? `${result.slice(0, MAX_BODY_SIZE)}...[TRUNCATED]` : result;
 }
@@ -60,7 +77,7 @@ function redactUrl(url: string): string {
   try {
     const u = new URL(url, window.location.href);
     u.searchParams.forEach((_, key) => {
-      if (SENSITIVE_FIELDS.test(key)) u.searchParams.set(key, '[REDACTED]');
+      if (isSensitiveField(key)) u.searchParams.set(key, '[REDACTED]');
     });
     return u.toString();
   } catch (e) {
