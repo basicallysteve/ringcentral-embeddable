@@ -1,7 +1,8 @@
 import type { FunctionComponent } from 'react';
 import React from 'react';
 
-import { styled, RcText, RcLink } from '@ringcentral/juno';
+import { styled, RcText, RcLink, RcIcon } from '@ringcentral/juno';
+import { Download } from '@ringcentral/juno-icon';
 import { Eula } from '@ringcentral-integration/widgets/components/Eula';
 import Line from '@ringcentral-integration/widgets/components/Line';
 import type { FooterProps } from '@ringcentral-integration/widgets/components/SettingsPanel/SettingsPanel.interface';
@@ -11,6 +12,12 @@ import { downloadHar } from '../../lib/HarRecorder';
 
 const StyledSection = styled.section`
   padding-top: 8px;
+`;
+
+const StyledDownloadLink = styled(RcLink)`
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 `;
 
 const StyledVersionContainer = styled(RcText)`
@@ -68,18 +75,23 @@ export const Footer: FunctionComponent<NewFooterProps> = ({
           isAdmin={isAdmin}
         />
       </StyledSection>
-      <StyledVersionContainer>
-        <RcLink
-          data-sign="downloadHar"
-          href="#"
-          onClick={(e: React.MouseEvent) => {
-            e.preventDefault();
-            downloadHar();
-          }}
-        >
-          {i18n.getString('downloadHar', currentLocale)}
-        </RcLink>
-      </StyledVersionContainer>
+      <StyledSection>
+        <Line noBorder>
+          <StyledDownloadLink
+            color="content.brand"
+            variant="inherit"
+            data-sign="downloadHar"
+            href="#"
+            onClick={(e: React.MouseEvent) => {
+              e.preventDefault();
+              downloadHar();
+            }}
+          >
+            <RcIcon symbol={Download} size="small" />
+            {i18n.getString('downloadHar', currentLocale)}
+          </StyledDownloadLink>
+        </Line>
+      </StyledSection>
       {versionArea}
     </>
   );
